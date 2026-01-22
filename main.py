@@ -4,49 +4,77 @@ import os
 # --- GESTION DES FICHIERS ---
 
 def charger_mots(nom_fichier="mots.txt"):
-    """Charge la liste des mots et leurs thèmes depuis le fichier."""
+    """Charge la liste des mots et leurs thèmes."""
     mots = []
     try:
         with open(nom_fichier, "r", encoding="utf-8") as f:
             for ligne in f:
                 if ";" in ligne:
-                    mots.append(ligne.strip().split(";"))
+                    parts = ligne.strip().split(";")
+                    if len(parts) >= 2:
+                        mots.append((parts[0].upper(), parts[1].upper()))
     except FileNotFoundError:
-        # Création automatique si absent
-        return [["PYTHON", "INFORMATIQUE"], ["PLATEFORME", "ECOLE"]]
+        return [("PYTHON", "INFORMATIQUE"), ("ECOLE", "EDUCATION")]
     return mots
 
-def charger_dernier_profil(nom_fichier="scores.txt"):
-    """Récupère le dernier score et solde de jetons enregistré[cite: 1]."""
-    profil = {"nom": "Joueur", "score": 0, "jetons": 10}
+def ajouter_nouveau_mot(mot, theme, nom_fichier="mots.txt"):
+    """Ajoute un nouveau mot dans le fichier."""
+    with open(nom_fichier, "a", encoding="utf-8") as f:
+        f.write(f"\n{mot.upper()};{theme.upper()}")
+
+def charger_meilleurs_scores(nom_fichier="scores.txt"):
+    """Retourne le Top 5 des scores (format : Nom : Mots trouvés)."""
+    scores = []
     if os.path.exists(nom_fichier):
         with open(nom_fichier, "r", encoding="utf-8") as f:
-            lignes = f.readlines()
-            if lignes:
-                # Format attendu : Nom;Score;Jetons [cite: 1]
-                derniere = lignes[-1].strip().split(";")
-                if len(derniere) >= 3:
-                    profil = {"nom": derniere[0], "score": int(derniere[1]), "jetons": int(derniere[2])}
-    return profil
+            for ligne in f:
+                parts = ligne.strip().split(";")
+                if len(parts) >= 3:
+                    # Format: Nom;MotsTrouves;Jetons
+                    scores.append({"nom": parts[0], "score": int(parts[1]), "jetons": int(parts[2])})
+    
+    # Tri par score (nombre de mots trouvés) décroissant
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return scores[:5]
 
-def enregistrer_score(nom, score, jetons, nom_fichier="scores.txt"):
-    """Sauvegarde les données de fin de partie[cite: 1]."""
+def enregistrer_score(nom, mots_trouves, jetons, nom_fichier="scores.txt"):
+    """Enregistre le score à la fin de la session."""
     with open(nom_fichier, "a", encoding="utf-8") as f:
-        f.write(f"{nom};{score};{jetons}\n")
+        f.write(f"{nom};{mots_trouves};{jetons}\n")
 
-# --- LOGIQUE MÉTIER ---
+def charger_profil_joueur(nom, nom_fichier="scores.txt"):
+    """Récupère les jetons d'un joueur existant ou initialise."""
+    jetons = 0
+    if os.path.exists(nom_fichier):
+        with open(nom_fichier, "r", encoding="utf-8") as f:
+            for ligne in f:
+                parts = ligne.strip().split(";")
+                if len(parts) >= 3 and parts[0] == nom:
+                    # On prend le dernier solde de jetons connu pour ce joueur
+                    jetons = int(parts[2])
+    return jetons
+
+# --- LOGIQUE DU JEU ---
 
 class PenduLogic:
-    def __init__(self, mot_data, jetons_depart):
-        self.mot_secret = mot_data[0].upper()
-        self.theme = mot_data[1].upper()
+    def __init__(self, donnees_mot, jetons, erreurs_precedentes=None):
+        self.mot_secret = donnees_mot[0]
+        self.theme = donnees_mot[1]
+        self.jetons = jetons
         self.lettres_trouvees = set()
         self.lettres_ratees = set()
-        self.jetons = jetons_depart
-        self.erreurs_max = 7 # Selon le schéma classique
+        
+        # Gestion du mode difficile (récupération des erreurs d'avant)
+        if erreurs_precedentes:
+            self.lettres_ratees = erreurs_precedentes
+            
+        self.erreurs_max = 7
 
     def proposer_lettre(self, lettre):
         lettre = lettre.upper()
+        if lettre in self.lettres_trouvees or lettre in self.lettres_ratees:
+            return False 
+
         if lettre in self.mot_secret:
             self.lettres_trouvees.add(lettre)
             return True
@@ -73,23 +101,4 @@ class PenduLogic:
         return None
 
     def etat_mot(self):
-        """Affiche le mot avec des '_' pour les lettres manquantes."""
         return " ".join([l if l in self.lettres_trouvees else "_" for l in self.mot_secret])
-    
-def charger_meilleurs_scores(nom_fichier="scores.txt"):
-    meilleurs_par_nom = {}
-    if os.path.exists(nom_fichier):
-        with open(nom_fichier, "r", encoding="utf-8") as f:
-            for ligne in f:
-                parts = ligne.strip().split(";")
-                if len(parts) >= 2:
-                    nom = parts[0]
-                    score = int(parts[1])
-                    # On ne garde que le score le plus haut pour ce nom
-                    if nom not in meilleurs_par_nom or score > meilleurs_par_nom[nom]:
-                        meilleurs_par_nom[nom] = score
-    
-    # Transformer le dictionnaire en liste triée
-    scores_tries = [{"nom": n, "score": s} for n, s in meilleurs_par_nom.items()]
-    scores_tries.sort(key=lambda x: x["score"], reverse=True)
-    return scores_tries[:5]
