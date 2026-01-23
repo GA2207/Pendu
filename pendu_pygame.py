@@ -1,10 +1,54 @@
 import pygame
 import random
 import time
+import os
+import sys
+import subprocess
 from main import (
     charger_mots, ajouter_nouveau_mot, PenduLogic,
     charger_meilleurs_scores, enregistrer_score, charger_profil_joueur
 )
+
+def get_env_config():
+    """Lit la config du mode 2 joueurs depuis la variable d'environnement PENDU_CONFIG.
+    Format: NOM|MOT|THEME|DIFFICULTE (difficulté optionnelle)
+    """
+    cfg = os.environ.get("PENDU_CONFIG")
+    if not cfg:
+        return None
+    parts = cfg.split("|")
+    if len(parts) < 3:
+        return None
+    nom = parts[0].strip() or "Joueur"
+    mot = parts[1].strip().upper()
+    theme = parts[2].strip().upper()
+    difficulte = parts[3].strip().upper() if len(parts) >= 4 and parts[3].strip() else None
+    return nom, mot, theme, difficulte
+
+
+def lancer_deux_fenetres_pygame(nom_j1, nom_j2, difficulte="MOYEN"):
+    """Lance 2 fenêtres Pygame (2 processus) avec un mot différent pour chaque joueur."""
+    mots = charger_mots()
+    if len(mots) < 2:
+        return False
+
+    random.shuffle(mots)
+    (mot1, theme1), (mot2, theme2) = mots[0], mots[1]
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(base_dir, "pendu_pygame.py")
+
+    env1 = os.environ.copy()
+    env1["PENDU_CONFIG"] = f"{nom_j1}|{mot1}|{theme1}|{difficulte}"
+
+    env2 = os.environ.copy()
+    env2["PENDU_CONFIG"] = f"{nom_j2}|{mot2}|{theme2}|{difficulte}"
+
+    subprocess.Popen([sys.executable, script], env=env1, cwd=base_dir)
+    subprocess.Popen([sys.executable, script], env=env2, cwd=base_dir)
+    return True
+
+
 
 # --- CONFIGURATION VISUELLE ---
 BOARD_DARK = (35, 43, 38)
@@ -22,6 +66,9 @@ STATE_GAMEOVER = 4
 STATE_ADD_WORD = 5
 
 
+STATE_PLAYER_COUNT = 6
+STATE_MULTI_NAMES = 7
+STATE_MULTI_DIFFICULTY = 8
 class Particule:
     def __init__(self, x, y):
         self.x = x
@@ -41,13 +88,13 @@ class PenduPygame:
         pygame.init()
         pygame.mixer.init()
 
-        # Taille de départ (fenêtre redimensionnable)
+        # Taille de départ
         SCREEN_WIDTH = 1280
         SCREEN_HEIGHT = 720
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
         pygame.display.set_caption("Le Pendu de l'École - Arcade Edition")
 
-        # Taille réelle courante de la fenêtre (source de vérité)
+        # Taille réelle courante de la fenêtre
         self.W, self.H = self.screen.get_size()
 
         # Chargement des ressources
@@ -72,8 +119,6 @@ class PenduPygame:
 
         # Variables globales
         self.clock = pygame.time.Clock()
-        self.state = STATE_LOGIN
-        self.nom_joueur = ""
         self.input_text = ""
         self.poussieres = []
 
@@ -86,7 +131,33 @@ class PenduPygame:
         self.logic = None
         self.message = ""
 
-        # Rectangles de boutons (clics fiables)
+        # --- MODE 2 JOUEURS ---
+        env_cfg = get_env_config()
+        if env_cfg:
+            nom, mot, theme, diff = env_cfg
+            self.nom_joueur = nom
+            if diff in ("FACILE", "MOYEN", "DIFFICILE"):
+                self.difficulte = diff
+
+            # Jetons du joueur
+            self.session_jetons = charger_profil_joueur(self.nom_joueur)
+
+            # Temps selon difficulté
+            if self.difficulte == "FACILE":
+                self.time_limit = 120
+            elif self.difficulte == "MOYEN":
+                self.time_limit = 90
+            else:
+                self.time_limit = 60  # DIFFICILE
+
+            self.start_time = pygame.time.get_ticks()
+            self.logic = PenduLogic((mot, theme), self.session_jetons, None)
+            self.state = STATE_GAME
+        else:
+            self.nom_joueur = ""
+            self.state = STATE_LOGIN
+
+        # Rectangles de boutons
         self.rect_jouer = None
         self.rect_ajouter = None
         self.rect_quitter = None
@@ -95,23 +166,34 @@ class PenduPygame:
         self.rect_difficile = None
         self.rect_retour = None
 
-        # Fond (tableau) : génération à la taille de la fenêtre
+        self.rect_1p = None
+        self.rect_2p = None
+        self.rect_player_retour = None
+        self.rect_multi_facile = None
+        self.rect_multi_moyen = None
+        self.rect_multi_difficile = None
+        self.rect_multi_retour = None
+
+        # Variables pour le mode 2 joueurs
+        self.multi_nom_j1 = ""
+        self.multi_nom_j2 = ""
+        self.multi_etape_nom = 1  # 1 = saisie J1, 2 = saisie J2
+
+        # Fond : génération à la taille de la fenêtre
         self.generer_fond()
 
-        # --- Cache potence (fixe) ---
+        # --- potence (fixe) ---
         self.potence_surface = None
         self.potence_cache_size = None
         self.build_potence_surface()
 
-    # ----------------------------
     #  FOND PLEIN ÉCRAN
-    # ----------------------------
     def generer_fond(self):
         """Génère le tableau (texture + poussières) à la taille actuelle de la fenêtre."""
         self.surface_tableau = pygame.Surface((self.W, self.H)).convert()
         self.surface_tableau.fill(BOARD_DARK)
 
-        # Petits grains (effet craie)
+        # Effet craie
         nb_points = int((self.W * self.H) / 200)
         for _ in range(nb_points):
             x, y = random.randint(0, self.W - 1), random.randint(0, self.H - 1)
@@ -125,9 +207,8 @@ class PenduPygame:
         self.screen = pygame.display.set_mode(new_size, pygame.RESIZABLE)
         self.W, self.H = self.screen.get_size()
         self.generer_fond()
-        self.build_potence_surface()  # ✅ potence recalculée au resize
+        self.build_potence_surface()
 
-    # ----------------------------
 
     def play_sound(self, name):
         if name in self.sons and self.sons[name]:
@@ -176,7 +257,7 @@ class PenduPygame:
         # Barre
         self.draw_stable_line(self.potence_surface, (pole_x, y_top), (x_hook, y_top), 4)
 
-        # Renfort diagonal intérieur (bien placé)
+        # Renfort diagonal intérieur
         reinforce_start = (pole_x, y_top + 18)
         reinforce_end = (pole_x + 38, y_top)
         self.draw_stable_line(self.potence_surface, reinforce_start, reinforce_end, 4)
@@ -286,6 +367,49 @@ class PenduPygame:
             self.rect_ajouter = self.draw_button("2. AJOUTER DES MOTS", 320, 2)
             self.rect_quitter = self.draw_button("3. QUITTER L'ÉCOLE", 410, 3)
 
+
+        elif self.state == STATE_PLAYER_COUNT:
+            self.draw_text_centered("CHOISIS LE NOMBRE DE JOUEURS", 100, self.font_title, YELLOW_CHALK)
+            pygame.draw.line(
+                self.screen,
+                CHALK_WHITE,
+                (self.W // 2 - 320, 140),
+                (self.W // 2 + 320, 140),
+                2
+            )
+
+            self.rect_1p = self.draw_button("1 JOUEUR", 240, 1)
+            self.rect_2p = self.draw_button("2 JOUEURS", 330, 2)
+            self.rect_player_retour = self.draw_button("RETOUR AU MENU", 450, 3)
+
+        elif self.state == STATE_MULTI_NAMES:
+            self.draw_text_centered("MODE 2 JOUEURS", 90, self.font_title, YELLOW_CHALK)
+            if self.multi_etape_nom == 1:
+                self.draw_text_centered("Nom du Joueur 1 :", 200, self.font_ui, CHALK_WHITE)
+            else:
+                self.draw_text_centered("Nom du Joueur 2 :", 200, self.font_ui, CHALK_WHITE)
+
+            input_rect = pygame.Rect(self.W // 2 - 220, 260, 440, 70)
+            pygame.draw.rect(self.screen, CHALK_WHITE, input_rect, 2)
+            self.draw_text_centered(self.input_text + "_", 295, self.font_main, YELLOW_CHALK)
+
+            self.draw_text_centered("Entrée : valider | Échap : retour", 380, self.font_ui, CHALK_WHITE)
+
+        elif self.state == STATE_MULTI_DIFFICULTY:
+            self.draw_text_centered("DIFFICULTÉ (2 JOUEURS)", 100, self.font_title, YELLOW_CHALK)
+            pygame.draw.line(
+                self.screen,
+                CHALK_WHITE,
+                (self.W // 2 - 320, 140),
+                (self.W // 2 + 320, 140),
+                2
+            )
+
+            self.rect_multi_facile = self.draw_button("FACILE (120s)", 220, 1)
+            self.rect_multi_moyen = self.draw_button("MOYEN (90s)", 310, 2)
+            self.rect_multi_difficile = self.draw_button("DIFFICILE (60s)", 400, 3)
+            self.rect_multi_retour = self.draw_button("RETOUR", 500, 4)
+
         elif self.state == STATE_DIFFICULTY:
             self.draw_text_centered("CHOISIS LA DIFFICULTÉ", 100, self.font_title, YELLOW_CHALK)
             pygame.draw.line(
@@ -322,8 +446,8 @@ class PenduPygame:
             self.draw_text_centered(f"Score : {self.session_score}", 260, self.font_main, CHALK_WHITE)
             self.draw_text_centered("Appuie sur ESPACE pour revenir au menu", 360, self.font_ui, CHALK_WHITE)
 
-        # ✅ Tableau d'honneur visible dans tous les menus (pas pendant la partie)
-        if self.state in (STATE_LOGIN, STATE_MENU, STATE_DIFFICULTY, STATE_ADD_WORD, STATE_GAMEOVER):
+        # Tableau d'honneur visible dans tous les menus (pas pendant la partie)
+        if self.state in (STATE_LOGIN, STATE_MENU, STATE_PLAYER_COUNT, STATE_MULTI_NAMES, STATE_MULTI_DIFFICULTY, STATE_DIFFICULTY, STATE_ADD_WORD, STATE_GAMEOVER):
             self.draw_leaderboard_box()
 
         pygame.display.flip()
@@ -424,7 +548,7 @@ class PenduPygame:
         if err >= 1:
             self.screen.blit(self.potence_surface, (0, 0))
 
-        # tremblement perso
+        # tremblement personnage
         jx = random.randint(-2, 2)
         jy = random.randint(-2, 2)
 
@@ -490,13 +614,13 @@ class PenduPygame:
                     self.on_resize(event.size)
 
                 # --- INPUT TEXTE (LOGIN ou AJOUT MOT) ---
-                if self.state in [STATE_LOGIN, STATE_ADD_WORD]:
+                if self.state in [STATE_LOGIN, STATE_ADD_WORD, STATE_MULTI_NAMES]:
                     if event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_RETURN:
                             if self.state == STATE_LOGIN and self.input_text.strip():
                                 self.nom_joueur = self.input_text.strip()
 
-                                # ✅ bonus : recharge jetons + scores dès la connexion
+                                # recharge jetons + scores dès la connexion
                                 self.session_jetons = charger_profil_joueur(self.nom_joueur)
                                 self.top_scores = charger_meilleurs_scores()
 
@@ -509,11 +633,35 @@ class PenduPygame:
                                 self.mots = charger_mots()
                                 self.play_sound('victoire')
                                 self.state = STATE_MENU
+
+                            elif self.state == STATE_MULTI_NAMES:
+                                saisie = self.input_text.strip()
+                                if self.multi_etape_nom == 1:
+                                    self.multi_nom_j1 = saisie if saisie else "Joueur 1"
+                                    self.input_text = ""
+                                    self.multi_etape_nom = 2
+                                else:
+                                    self.multi_nom_j2 = saisie if saisie else "Joueur 2"
+                                    self.input_text = ""
+                                    self.multi_etape_nom = 1
+                                    self.play_sound('craie')
+                                    self.state = STATE_MULTI_DIFFICULTY
+                                    continue
+
                             self.input_text = ""
 
                         elif event.key == pygame.K_BACKSPACE:
                             self.input_text = self.input_text[:-1]
                         elif event.key == pygame.K_ESCAPE and self.state == STATE_ADD_WORD:
+                            self.state = STATE_MENU
+                            self.input_text = ""
+
+                        elif event.key == pygame.K_ESCAPE and self.state == STATE_MULTI_NAMES:
+                            self.play_sound('craie')
+                            self.input_text = ""
+                            self.multi_etape_nom = 1
+                            self.state = STATE_PLAYER_COUNT
+
                             self.state = STATE_MENU
                         else:
                             self.input_text += event.unicode
@@ -524,7 +672,7 @@ class PenduPygame:
                         mx, my = pygame.mouse.get_pos()
 
                         if self.rect_jouer and self.rect_jouer.collidepoint((mx, my)):
-                            self.state = STATE_DIFFICULTY
+                            self.state = STATE_PLAYER_COUNT
                             self.play_sound('craie')
 
                         elif self.rect_ajouter and self.rect_ajouter.collidepoint((mx, my)):
@@ -532,6 +680,52 @@ class PenduPygame:
                             self.play_sound('craie')
 
                         elif self.rect_quitter and self.rect_quitter.collidepoint((mx, my)):
+                            pygame.quit()
+                            return
+
+
+                # --- CHOIX NOMBRE DE JOUEURS ---
+                elif self.state == STATE_PLAYER_COUNT:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+
+                        if self.rect_1p and self.rect_1p.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.state = STATE_DIFFICULTY
+
+                        elif self.rect_2p and self.rect_2p.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.input_text = ""
+                            self.multi_nom_j1 = ""
+                            self.multi_nom_j2 = ""
+                            self.multi_etape_nom = 1
+                            self.state = STATE_MULTI_NAMES
+
+                        elif self.rect_player_retour and self.rect_player_retour.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.state = STATE_MENU
+
+                # --- DIFFICULTÉ (2 JOUEURS) ---
+                elif self.state == STATE_MULTI_DIFFICULTY:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+
+                        if self.rect_multi_facile and self.rect_multi_facile.collidepoint((mx, my)):
+                            diff = "FACILE"
+                        elif self.rect_multi_moyen and self.rect_multi_moyen.collidepoint((mx, my)):
+                            diff = "MOYEN"
+                        elif self.rect_multi_difficile and self.rect_multi_difficile.collidepoint((mx, my)):
+                            diff = "DIFFICILE"
+                        elif self.rect_multi_retour and self.rect_multi_retour.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.state = STATE_PLAYER_COUNT
+                            continue
+                        else:
+                            diff = None
+
+                        if diff:
+                            self.play_sound('craie')
+                            ok = lancer_deux_fenetres_pygame(self.multi_nom_j1 or "Joueur 1", self.multi_nom_j2 or "Joueur 2", diff)
                             pygame.quit()
                             return
 
