@@ -86,6 +86,8 @@ class PenduPygame:
         self.time_limit = 60
         self.logic = None
         self.message = ""
+        self.message_time = 0
+        self.message_duration_ms = 2000  # 2 secondes
         self.nom_joueur = ""
 
         # --- MULTI (2 joueurs / 1 seul clavier / tour par tour / pas de timer) ---
@@ -126,9 +128,7 @@ class PenduPygame:
         self.potence_cache_size = None
         self.build_potence_surface()
 
-    # ----------------------------
     #  FOND PLEIN ÉCRAN
-    # ----------------------------
     def generer_fond(self):
         self.surface_tableau = pygame.Surface((self.W, self.H)).convert()
         self.surface_tableau.fill(BOARD_DARK)
@@ -136,165 +136,44 @@ class PenduPygame:
         nb_points = int((self.W * self.H) / 200)
         for _ in range(nb_points):
             x, y = random.randint(0, self.W - 1), random.randint(0, self.H - 1)
-            s = pygame.Surface((2, 2)).convert_alpha()
-            s.set_alpha(random.randint(5, 15))
-            s.fill((255, 255, 255))
-            self.surface_tableau.blit(s, (x, y))
+            c = random.randint(40, 65)
+            self.surface_tableau.set_at((x, y), (c, c, c))
 
-    def on_resize(self, new_size):
-        self.screen = pygame.display.set_mode(new_size, pygame.RESIZABLE)
-        self.W, self.H = self.screen.get_size()
-        self.generer_fond()
-        self.build_potence_surface()
-
-    # ----------------------------
-    def play_sound(self, name):
-        if name in self.sons and self.sons[name]:
-            self.sons[name].play()
-
-    def draw_chalk_line(self, start, end, width=4):
-        points = []
-        dist = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
-        steps = int(dist // 5) + 1
-        for i in range(steps):
-            x = start[0] + (end[0] - start[0]) * i / steps + random.randint(-1, 1)
-            y = start[1] + (end[1] - start[1]) * i / steps + random.randint(-1, 1)
-            points.append((x, y))
-        if len(points) > 1:
-            pygame.draw.lines(self.screen, CHALK_WHITE, False, points, width)
-
-    def draw_stable_line(self, surface, start, end, width=4):
-        pygame.draw.line(surface, CHALK_WHITE, start, end, width)
-
+    #  POTENCE FIXE (cachée)
     def build_potence_surface(self):
-        size = (self.W, self.H)
-        if self.potence_surface is not None and self.potence_cache_size == size:
-            return
-
-        self.potence_cache_size = size
-        self.potence_surface = pygame.Surface(size, pygame.SRCALPHA)
+        self.potence_surface = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+        self.potence_cache_size = (self.W, self.H)
 
         x0 = 90
         y_sol = self.H - 170
         y_top = 140
 
-        base_w = 240
         pole_x = x0 + 70
         beam_len = 190
-        x_hook = pole_x + beam_len
 
-        self.draw_stable_line(self.potence_surface, (x0, y_sol), (x0 + base_w, y_sol), 4)
-        self.draw_stable_line(self.potence_surface, (pole_x, y_sol), (pole_x, y_top), 4)
-        self.draw_stable_line(self.potence_surface, (pole_x, y_top), (x_hook, y_top), 4)
+        pygame.draw.line(self.potence_surface, CHALK_WHITE, (x0, y_sol), (x0 + 180, y_sol), 6)
+        pygame.draw.line(self.potence_surface, CHALK_WHITE, (pole_x, y_sol), (pole_x, y_top), 6)
+        pygame.draw.line(self.potence_surface, CHALK_WHITE, (pole_x, y_top), (pole_x + beam_len, y_top), 6)
+        pygame.draw.line(self.potence_surface, CHALK_WHITE, (pole_x + beam_len, y_top), (pole_x + beam_len, y_top + 35), 6)
 
-        reinforce_start = (pole_x, y_top + 18)
-        reinforce_end = (pole_x + 38, y_top)
-        self.draw_stable_line(self.potence_surface, reinforce_start, reinforce_end, 4)
+    #  REDIMENSIONNEMENT
+    def on_resize(self, size):
+        self.W, self.H = size
+        self.screen = pygame.display.set_mode((self.W, self.H), pygame.RESIZABLE)
+        self.generer_fond()
+        self.build_potence_surface()
 
-    # ----------------------------
-    #  SESSIONS
-    # ----------------------------
-    def start_new_session(self):
-        self.is_multiplayer = False
-        self.session_score = 0
-        self.session_jetons = charger_profil_joueur(self.nom_joueur)
-        self.start_time = pygame.time.get_ticks()
-
-        if self.difficulte == "FACILE":
-            self.time_limit = 120
-        elif self.difficulte == "MOYEN":
-            self.time_limit = 90
-        else:
-            self.time_limit = 60
-
-        self.next_word()
-        self.state = STATE_GAME
-
-    def next_word(self):
-        erreurs_a_garder = None
-        if self.difficulte == "DIFFICILE" and self.logic:
-            erreurs_a_garder = self.logic.lettres_ratees
-
-        self.logic = PenduLogic(random.choice(self.mots), self.session_jetons, erreurs_a_garder)
-        self.message = "Nouveau mot ! Bonne chance."
-
-    def start_multiplayer_session(self, difficulte):
-        self.is_multiplayer = True
-        self.difficulte = difficulte
-        self.multi_result = ""
-        self.message = ""
-
-        mots = charger_mots()
-        if len(mots) < 2:
-            self.is_multiplayer = False
-            self.message = "Il faut au moins 2 mots dans mots.txt."
-            self.state = STATE_MENU
-            return
-
-        random.shuffle(mots)
-        mot1 = mots[0]
-        mot2 = mots[1]
-
-        j1_name = self.multi_nom_j1 or "Joueur 1"
-        j2_name = self.multi_nom_j2 or "Joueur 2"
-
-        j1_jetons = charger_profil_joueur(j1_name)
-        j2_jetons = charger_profil_joueur(j2_name)
-
-        self.players = [
-            {"nom": j1_name, "logic": PenduLogic(mot1, j1_jetons, None)},
-            {"nom": j2_name, "logic": PenduLogic(mot2, j2_jetons, None)},
-        ]
-        self.current_player = 0
-        self.logic = self.players[self.current_player]["logic"]
-
-        self.state = STATE_GAME
-
-    def finish_multiplayer(self, winner_idx, loser_idx, text):
-        self.multi_result = text
-
-        # On sauvegarde juste les jetons (score à 0 pour ne pas polluer le leaderboard)
-        try:
-            w = self.players[winner_idx]
-            l = self.players[loser_idx]
-            enregistrer_score(w["nom"], 0, w["logic"].jetons)
-            enregistrer_score(l["nom"], 0, l["logic"].jetons)
-        except:
-            pass
-
-        self.top_scores = charger_meilleurs_scores()
-        self.state = STATE_GAMEOVER
-
-    # ----------------------------
-    #  UI
-    # ----------------------------
+    #  UTILITAIRES TEXTE / UI
     def draw_text_centered(self, text, y, font, color=CHALK_WHITE):
         surf = font.render(text, True, color)
         rect = surf.get_rect(center=(self.W // 2, y))
         self.screen.blit(surf, rect)
 
-    def draw_button(self, text, rect_y, button_id):
-        mouse_pos = pygame.mouse.get_pos()
-
-        MENU_LEFT = 120
-        MENU_RIGHT = 680
-        MAX_W = MENU_RIGHT - MENU_LEFT
-
-        rect_height = 60
-        padding_x = 24
-
-        size = 40
-        font = pygame.font.SysFont("Comic Sans MS", size)
-
-        while True:
-            surf = font.render(text, True, CHALK_WHITE)
-            if surf.get_width() + padding_x * 2 <= MAX_W or size <= 22:
-                break
-            size -= 2
-            font = pygame.font.SysFont("Comic Sans MS", size)
-
-        rect_width = min(surf.get_width() + padding_x * 2, MAX_W)
-        rect_x = MENU_LEFT + (MAX_W - rect_width) // 2
+    def draw_button(self, text, center_y, font, mouse_pos):
+        rect_width = 380
+        rect_height = 70
+        rect_x = self.W // 2 - rect_width // 2
+        rect_y = center_y - rect_height // 2
         rect = pygame.Rect(rect_x, rect_y, rect_width, rect_height)
 
         is_hovered = rect.collidepoint(mouse_pos)
@@ -315,6 +194,7 @@ class PenduPygame:
 
         return rect
 
+    #  ÉCRANS (DRAW)
     def update_and_draw(self):
         self.screen.blit(self.surface_tableau, (0, 0))
 
@@ -322,62 +202,54 @@ class PenduPygame:
             self.draw_text_centered("BIENVENUE EN CLASSE", 120, self.font_title, YELLOW_CHALK)
             self.draw_text_centered("Écris ton nom pour commencer :", 250, self.font_ui)
 
-            input_rect = pygame.Rect(self.W // 2 - 200, 300, 400, 70)
+            input_rect = pygame.Rect(self.W // 2 - 300, 320, 600, 70)
             pygame.draw.rect(self.screen, CHALK_WHITE, input_rect, 2)
-            self.draw_text_centered(self.input_text + "_", 335, self.font_main, YELLOW_CHALK)
+            self.draw_text_centered(self.input_text + "_", 355, self.font_main, YELLOW_CHALK)
 
         elif self.state == STATE_MENU:
-            self.draw_text_centered("MENU PRINCIPAL", 80, self.font_title, CHALK_WHITE)
-            self.draw_text_centered(
-                f"Joueur : {self.nom_joueur} | Jetons : {self.session_jetons}",
-                160,
-                self.font_ui,
-                GREEN_CHALK
-            )
-            self.draw_chalk_line((self.W // 2 - 250, 190), (self.W // 2 + 250, 190), 2)
+            self.draw_text_centered("MENU PRINCIPAL", 120, self.font_title, YELLOW_CHALK)
+            mouse_pos = pygame.mouse.get_pos()
+            self.rect_jouer = self.draw_button("JOUER", 260, self.font_main, mouse_pos)
+            self.rect_ajouter = self.draw_button("AJOUTER UN MOT", 360, self.font_main, mouse_pos)
+            self.rect_quitter = self.draw_button("QUITTER", 460, self.font_main, mouse_pos)
 
-            self.rect_jouer = self.draw_button("1. COMMENCER L'EXAMEN", 230, 1)
-            self.rect_ajouter = self.draw_button("2. AJOUTER DES MOTS", 320, 2)
-            self.rect_quitter = self.draw_button("3. QUITTER L'ÉCOLE", 410, 3)
+            if self.nom_joueur:
+                self.draw_text_centered(f"Joueur : {self.nom_joueur}", 600, self.font_ui, CHALK_WHITE)
+                self.draw_text_centered(f"Jetons : {self.session_jetons}", 640, self.font_ui, YELLOW_CHALK)
 
         elif self.state == STATE_PLAYER_COUNT:
-            self.draw_text_centered("CHOISIS LE NOMBRE DE JOUEURS", 100, self.font_title, YELLOW_CHALK)
-            pygame.draw.line(self.screen, CHALK_WHITE, (self.W // 2 - 320, 140), (self.W // 2 + 320, 140), 2)
-
-            self.rect_1p = self.draw_button("1 JOUEUR", 240, 1)
-            self.rect_2p = self.draw_button("2 JOUEURS", 330, 2)
-            self.rect_player_retour = self.draw_button("RETOUR AU MENU", 450, 3)
+            self.draw_text_centered("CHOISIS LE MODE", 120, self.font_title, YELLOW_CHALK)
+            mouse_pos = pygame.mouse.get_pos()
+            self.rect_1p = self.draw_button("1 JOUEUR", 300, self.font_main, mouse_pos)
+            self.rect_2p = self.draw_button("2 JOUEURS", 400, self.font_main, mouse_pos)
+            self.rect_player_retour = self.draw_button("RETOUR", 520, self.font_main, mouse_pos)
 
         elif self.state == STATE_MULTI_NAMES:
-            self.draw_text_centered("MODE 2 JOUEURS", 90, self.font_title, YELLOW_CHALK)
-            if self.multi_etape_nom == 1:
-                self.draw_text_centered("Nom du Joueur 1 :", 200, self.font_ui, CHALK_WHITE)
-            else:
-                self.draw_text_centered("Nom du Joueur 2 :", 200, self.font_ui, CHALK_WHITE)
+            self.draw_text_centered("MODE 2 JOUEURS", 120, self.font_title, YELLOW_CHALK)
+            prompt = "Nom Joueur 1 :" if self.multi_etape_nom == 1 else "Nom Joueur 2 :"
+            self.draw_text_centered(prompt, 250, self.font_ui, CHALK_WHITE)
 
-            input_rect = pygame.Rect(self.W // 2 - 220, 260, 440, 70)
+            input_rect = pygame.Rect(self.W // 2 - 300, 320, 600, 70)
             pygame.draw.rect(self.screen, CHALK_WHITE, input_rect, 2)
-            self.draw_text_centered(self.input_text + "_", 295, self.font_main, YELLOW_CHALK)
+            self.draw_text_centered(self.input_text + "_", 355, self.font_main, YELLOW_CHALK)
 
-            self.draw_text_centered("Entrée : valider | Échap : retour", 380, self.font_ui, CHALK_WHITE)
-
-        elif self.state == STATE_MULTI_DIFFICULTY:
-            self.draw_text_centered("DIFFICULTÉ (2 JOUEURS)", 100, self.font_title, YELLOW_CHALK)
-            pygame.draw.line(self.screen, CHALK_WHITE, (self.W // 2 - 320, 140), (self.W // 2 + 320, 140), 2)
-
-            self.rect_multi_facile = self.draw_button("FACILE", 220, 1)
-            self.rect_multi_moyen = self.draw_button("MOYEN", 310, 2)
-            self.rect_multi_difficile = self.draw_button("DIFFICILE", 400, 3)
-            self.rect_multi_retour = self.draw_button("RETOUR", 500, 4)
+            self.draw_text_centered("Entrée : valider / Échap : retour", 450, self.font_ui, CHALK_WHITE)
 
         elif self.state == STATE_DIFFICULTY:
-            self.draw_text_centered("CHOISIS LA DIFFICULTÉ", 100, self.font_title, YELLOW_CHALK)
-            pygame.draw.line(self.screen, CHALK_WHITE, (self.W // 2 - 260, 140), (self.W // 2 + 260, 140), 2)
+            self.draw_text_centered("CHOISIS LA DIFFICULTÉ", 120, self.font_title, YELLOW_CHALK)
+            mouse_pos = pygame.mouse.get_pos()
+            self.rect_facile = self.draw_button("FACILE", 260, self.font_main, mouse_pos)
+            self.rect_moyen = self.draw_button("MOYEN", 360, self.font_main, mouse_pos)
+            self.rect_difficile = self.draw_button("DIFFICILE", 460, self.font_main, mouse_pos)
+            self.rect_retour = self.draw_button("RETOUR", 580, self.font_main, mouse_pos)
 
-            self.rect_facile = self.draw_button("FACILE (120s)", 220, 1)
-            self.rect_moyen = self.draw_button("MOYEN (90s)", 310, 2)
-            self.rect_difficile = self.draw_button("DIFFICILE (60s)", 400, 3)
-            self.rect_retour = self.draw_button("RETOUR AU MENU", 500, 4)
+        elif self.state == STATE_MULTI_DIFFICULTY:
+            self.draw_text_centered("DIFFICULTÉ (2 JOUEURS)", 120, self.font_title, YELLOW_CHALK)
+            mouse_pos = pygame.mouse.get_pos()
+            self.rect_multi_facile = self.draw_button("FACILE", 260, self.font_main, mouse_pos)
+            self.rect_multi_moyen = self.draw_button("MOYEN", 360, self.font_main, mouse_pos)
+            self.rect_multi_difficile = self.draw_button("DIFFICILE", 460, self.font_main, mouse_pos)
+            self.rect_multi_retour = self.draw_button("RETOUR", 580, self.font_main, mouse_pos)
 
         elif self.state == STATE_GAME:
             if self.logic is not None:
@@ -464,8 +336,17 @@ class PenduPygame:
 
         center_x = self.W // 2 + 50
         self.draw_text_centered(self.logic.etat_mot(), 300, self.font_title)
+
+        # Message : permanent si message_time == 0, temporaire sinon
         if self.message:
-            self.draw_text_centered(self.message, 200, self.font_ui)
+            if self.message_time > 0:
+                if (pygame.time.get_ticks() - self.message_time) <= self.message_duration_ms:
+                    self.draw_text_centered(self.message, 200, self.font_ui)
+                else:
+                    self.message = ""
+                    self.message_time = 0
+            else:
+                self.draw_text_centered(self.message, 200, self.font_ui)
 
         fautes = f"Fautes: {', '.join(self.logic.lettres_ratees)}"
         surf_f = self.font_ui.render(fautes, True, RED_CHALK)
@@ -502,48 +383,91 @@ class PenduPygame:
 
         head_r = 22
         body_len = 90
-        arm_len = 45
-        leg_len = 60
-        leg_spread = 35
-
-        HEAD_FILL = (230, 170, 190)
 
         if err >= 1:
             self.screen.blit(self.potence_surface, (0, 0))
 
-        jx = random.randint(-2, 2)
-        jy = random.randint(-2, 2)
 
-        xh = x_hook + jx
-        y_rope_top = y_beam + jy
-        y_rope_bottom = y_beam + rope_h + jy
-
-        head_center = (xh, y_rope_bottom + head_r)
-
-        body_top_y = head_center[1] + head_r + 5
-        body_bottom_y = body_top_y + body_len
-
-        arm_y = body_top_y + 20
+        x_head = x_hook
+        y_head = y_beam + rope_h + head_r
 
         if err >= 2:
-            self.draw_chalk_line((xh, y_rope_top), (xh, y_rope_bottom), 4)
-            pygame.draw.circle(self.screen, HEAD_FILL, head_center, head_r)
-            pygame.draw.circle(self.screen, CHALK_WHITE, head_center, head_r, 3)
-
+            pygame.draw.circle(self.screen, CHALK_WHITE, (x_head, y_head), head_r, 4)
         if err >= 3:
-            self.draw_chalk_line((xh, body_top_y), (xh, body_bottom_y), 4)
-
+            pygame.draw.line(self.screen, CHALK_WHITE, (x_head, y_head + head_r), (x_head, y_head + head_r + body_len), 4)
         if err >= 4:
-            self.draw_chalk_line((xh, arm_y), (xh + arm_len, arm_y + 20), 4)
-
+            pygame.draw.line(self.screen, CHALK_WHITE, (x_head, y_head + head_r + 20), (x_head - 40, y_head + head_r + 55), 4)
         if err >= 5:
-            self.draw_chalk_line((xh, arm_y), (xh - arm_len, arm_y + 20), 4)
-
+            pygame.draw.line(self.screen, CHALK_WHITE, (x_head, y_head + head_r + 20), (x_head + 40, y_head + head_r + 55), 4)
         if err >= 6:
-            self.draw_chalk_line((xh, body_bottom_y), (xh + leg_spread, body_bottom_y + leg_len), 4)
-
+            pygame.draw.line(self.screen, CHALK_WHITE, (x_head, y_head + head_r + body_len), (x_head - 35, y_head + head_r + body_len + 55), 4)
         if err >= 7:
-            self.draw_chalk_line((xh, body_bottom_y), (xh - leg_spread, body_bottom_y + leg_len), 4)
+            pygame.draw.line(self.screen, CHALK_WHITE, (x_head, y_head + head_r + body_len), (x_head + 35, y_head + head_r + body_len + 55), 4)
+        if err >= 8:
+            pygame.draw.line(self.screen, RED_CHALK, (x_head - 10, y_head - 10), (x_head + 10, y_head + 10), 4)
+            pygame.draw.line(self.screen, RED_CHALK, (x_head + 10, y_head - 10), (x_head - 10, y_head + 10), 4)
+
+        # Particules
+        for p in self.poussieres[:]:
+            p.update()
+            if p.vie <= 0:
+                self.poussieres.remove(p)
+                continue
+            pygame.draw.circle(self.screen, (255, 255, 255, p.vie), (int(p.x), int(p.y)), 2)
+
+    #  LOGIQUE JEU (DÉMARRAGE / SUITE)
+    def start_game_session(self, difficulte):
+        self.is_multiplayer = False
+        self.difficulte = difficulte
+        self.session_score = 0
+        self.session_jetons = charger_profil_joueur(self.nom_joueur)
+        self.start_time = pygame.time.get_ticks()
+
+        if difficulte == "FACILE":
+            self.time_limit = 90
+        elif difficulte == "MOYEN":
+            self.time_limit = 60
+        else:
+            self.time_limit = 45
+
+        mot = random.choice(self.mots)
+        self.logic = PenduLogic(mot, self.session_jetons)
+        self.message = ""
+        self.message_time = 0
+        self.state = STATE_GAME
+
+    def next_word(self, erreurs_a_garder=0):
+        mot = random.choice(self.mots)
+        self.logic = PenduLogic(mot, self.session_jetons, erreurs_a_garder)
+        self.message = "Nouveau mot ! Bonne chance."
+
+    def start_multiplayer_session(self, difficulte):
+        self.is_multiplayer = True
+        self.difficulte = difficulte
+        self.multi_result = ""
+        self.message = ""
+        self.message_time = 0
+
+        mots = charger_mots()
+        if len(mots) < 2:
+            self.is_multiplayer = False
+            self.message = "Il faut au moins 2 mots dans mots.txt."
+            self.state = STATE_MENU
+            return
+
+        mots_choisis = random.sample(mots, 2)
+        self.players = [
+            {"nom": self.multi_nom_j1 if self.multi_nom_j1 else "Joueur 1", "logic": PenduLogic(mots_choisis[0], 10)},
+            {"nom": self.multi_nom_j2 if self.multi_nom_j2 else "Joueur 2", "logic": PenduLogic(mots_choisis[1], 10)},
+        ]
+        self.current_player = 0
+        self.logic = self.players[self.current_player]["logic"]
+        self.state = STATE_GAME
+
+    def finish_multiplayer(self, winner, loser, text):
+        self.multi_result = text
+        self.play_sound('victoire')
+        self.state = STATE_GAMEOVER
 
     def game_over(self, victoire):
         if victoire:
@@ -551,11 +475,20 @@ class PenduPygame:
         else:
             self.play_sound('defaite')
 
-        enregistrer_score(self.nom_joueur, self.session_score, self.logic.jetons)
-        self.session_jetons = self.logic.jetons
+        if not self.is_multiplayer and self.nom_joueur:
+            enregistrer_score(self.nom_joueur, self.session_score)
+
         self.top_scores = charger_meilleurs_scores()
         self.state = STATE_GAMEOVER
 
+    def play_sound(self, key):
+        try:
+            if key in self.sons:
+                self.sons[key].play()
+        except:
+            pass
+
+    #  BOUCLE PRINCIPALE
     def run(self):
         while True:
             self.clock.tick(60)
@@ -631,12 +564,13 @@ class PenduPygame:
                         elif self.rect_ajouter and self.rect_ajouter.collidepoint((mx, my)):
                             self.state = STATE_ADD_WORD
                             self.play_sound('craie')
+                            self.input_text = ""
 
                         elif self.rect_quitter and self.rect_quitter.collidepoint((mx, my)):
                             pygame.quit()
                             return
 
-                # --- CHOIX NOMBRE DE JOUEURS ---
+                # --- CHOIX 1P/2P ---
                 elif self.state == STATE_PLAYER_COUNT:
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         mx, my = pygame.mouse.get_pos()
@@ -647,67 +581,64 @@ class PenduPygame:
 
                         elif self.rect_2p and self.rect_2p.collidepoint((mx, my)):
                             self.play_sound('craie')
-                            self.input_text = ""
-                            self.multi_nom_j1 = ""
-                            self.multi_nom_j2 = ""
-                            self.multi_etape_nom = 1
                             self.state = STATE_MULTI_NAMES
+                            self.input_text = ""
+                            self.multi_etape_nom = 1
 
                         elif self.rect_player_retour and self.rect_player_retour.collidepoint((mx, my)):
                             self.play_sound('craie')
                             self.state = STATE_MENU
 
-                # --- DIFFICULTÉ (2 JOUEURS) ---
-                elif self.state == STATE_MULTI_DIFFICULTY:
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        mx, my = pygame.mouse.get_pos()
-
-                        if self.rect_multi_facile and self.rect_multi_facile.collidepoint((mx, my)):
-                            diff = "FACILE"
-                        elif self.rect_multi_moyen and self.rect_multi_moyen.collidepoint((mx, my)):
-                            diff = "MOYEN"
-                        elif self.rect_multi_difficile and self.rect_multi_difficile.collidepoint((mx, my)):
-                            diff = "DIFFICILE"
-                        elif self.rect_multi_retour and self.rect_multi_retour.collidepoint((mx, my)):
-                            self.play_sound('craie')
-                            self.state = STATE_PLAYER_COUNT
-                            continue
-                        else:
-                            diff = None
-
-                        if diff:
-                            self.play_sound('craie')
-                            self.start_multiplayer_session(diff)
-                            continue
-
-                # --- CLICK DIFFICULTÉ (SOLO) ---
+                # --- CLICK DIFFICULTY SOLO ---
                 elif self.state == STATE_DIFFICULTY:
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         mx, my = pygame.mouse.get_pos()
 
                         if self.rect_facile and self.rect_facile.collidepoint((mx, my)):
-                            self.difficulte = "FACILE"
                             self.play_sound('craie')
-                            self.start_new_session()
+                            self.start_game_session("FACILE")
 
                         elif self.rect_moyen and self.rect_moyen.collidepoint((mx, my)):
-                            self.difficulte = "MOYEN"
                             self.play_sound('craie')
-                            self.start_new_session()
+                            self.start_game_session("MOYEN")
 
                         elif self.rect_difficile and self.rect_difficile.collidepoint((mx, my)):
-                            self.difficulte = "DIFFICILE"
                             self.play_sound('craie')
-                            self.start_new_session()
+                            self.start_game_session("DIFFICILE")
 
                         elif self.rect_retour and self.rect_retour.collidepoint((mx, my)):
                             self.play_sound('craie')
                             self.state = STATE_MENU
 
-                # --- JEU ---
+                # --- CLICK DIFFICULTY MULTI ---
+                elif self.state == STATE_MULTI_DIFFICULTY:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        mx, my = pygame.mouse.get_pos()
+
+                        if self.rect_multi_facile and self.rect_multi_facile.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.start_multiplayer_session("FACILE")
+
+                        elif self.rect_multi_moyen and self.rect_multi_moyen.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.start_multiplayer_session("MOYEN")
+
+                        elif self.rect_multi_difficile and self.rect_multi_difficile.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.start_multiplayer_session("DIFFICILE")
+
+                        elif self.rect_multi_retour and self.rect_multi_retour.collidepoint((mx, my)):
+                            self.play_sound('craie')
+                            self.state = STATE_MENU
+
+                # --- GAME INPUT ---
                 elif self.state == STATE_GAME:
                     if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_1:
+                        if event.key == pygame.K_ESCAPE:
+                            self.state = STATE_MENU
+                            self.play_sound('craie')
+
+                        elif event.key == pygame.K_1:
                             res = self.logic.acheter_indice_theme()
                             self.message = f"THÈME : {res}" if res else "Pas assez de jetons"
                             self.play_sound('craie')
@@ -716,6 +647,12 @@ class PenduPygame:
                             res = self.logic.acheter_indice_lettre()
                             if res:
                                 self.play_sound('craie')
+
+                        # chiffres -> message d'erreur 2 secondes
+                        elif event.unicode.isdigit():
+                            self.message = "Tape une lettre, pas un nombre."
+                            self.message_time = pygame.time.get_ticks()
+                            self.play_sound('craie')
 
                         elif event.unicode.isalpha():
                             l = event.unicode.upper()
@@ -743,6 +680,7 @@ class PenduPygame:
                                 self.current_player = 1 - self.current_player
                                 self.logic = self.players[self.current_player]["logic"]
                                 self.message = ""
+                                self.message_time = 0
                                 continue
 
                     # SOLO : quand le mot est trouvé -> mot suivant
