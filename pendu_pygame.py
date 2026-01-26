@@ -651,6 +651,9 @@ class PenduPygame:
                         # chiffres -> message d'erreur 2 secondes
                         elif event.unicode.isdigit():
                             self.message = "Tape une lettre, pas un nombre."
+                        # NOUVEAU : chiffres -> message d'erreur 2 secondes
+                        elif event.unicode.isdigit():
+                            self.message = "❌ Tape une lettre, pas un nombre."
                             self.message_time = pygame.time.get_ticks()
                             self.play_sound('craie')
 
